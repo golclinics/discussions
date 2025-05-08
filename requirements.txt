@@ -1,0 +1,11 @@
+Flask==2.3.3
+requests==2.31.0
+python-dotenv==1.0.0
+prompty==0.2.0
+schedule==1.2.0
+openai==0.28.1
+typing-extensions==4.8.0
+azure-search-documents==11.6.0
+azure-identity==1.14.1
+
+# Security note: Review these pinned versions regularly and update as needed

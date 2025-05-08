@@ -1,0 +1,13 @@
+.env
+
+# add .run folder
+.runs/*
+.runs
+
+# gitignore for a python and flask application
+__pycache__/
+*.py[cod]
+./venv/*
+venv/
+
+azure-ai-foundry-discussions.2025-05-06.private-key.pem
