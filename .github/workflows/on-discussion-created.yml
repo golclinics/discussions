@@ -27,10 +27,14 @@ jobs:
 
       - name: Run discussion labeler
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
           APP_ID: ${{ secrets.APP_ID }}
-          APP_PRIVATE_KEY_PATH: ${{ secrets.APP_PRIVATE_KEY_PATH }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           APP_INSTALLATION_ID: ${{ secrets.APP_INSTALLATION_ID }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_KEY: ${{ secrets.AZURE_OPENAI_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
           DEFAULT_REPO: ${{ github.repository }}
         run: |
-          python test.py ${{ secrets.SECRET_KEY }}
+          python basic.py

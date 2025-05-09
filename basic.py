@@ -45,15 +45,24 @@ if 'prompty' in globals():
     json_tracer = PromptyTracer()
     Tracer.add("PromptyTracer", json_tracer.tracer)
 
-# API settings - get token from environment variables
+# Global variables
 TOKEN = os.getenv("TOKEN")
 DEFAULT_REPO = os.getenv("DEFAULT_REPO", "golclinics/discussions")
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))  # Default 30 second timeout
 
 # App settings
 APP_ID = os.getenv("APP_ID")
-APP_PRIVATE_KEY_PATH = os.getenv("APP_PRIVATE_KEY_PATH", "./azure-ai-foundry-discussions.2025-05-06.private-key.pem")
-GITHUB_APP_INSTALLATION_ID = os.getenv("GITHUB_APP_INSTALLATION_ID")
+APP_PRIVATE_KEY = os.getenv("APP_PRIVATE_KEY")  # Direct key content instead of file path
+APP_PRIVATE_KEY_PATH = os.getenv("APP_PRIVATE_KEY_PATH")  # Keep for backward compatibility
+APP_INSTALLATION_ID = os.getenv("APP_INSTALLATION_ID")  # Removed GITHUB_ prefix
+
+# Azure OpenAI settings
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
+
+# Other settings
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # GitHub API rate limiting constants
 MAX_RETRIES = 3
@@ -69,21 +78,21 @@ class GithubAppAuthError(Exception):
 
 def validate_token() -> None:
     """Validate that the GitHub token is available."""
-    if not GITHUB_TOKEN:
+    if not TOKEN:
         raise TokenMissingError(
             "GitHub token not found in environment variables. "
-            "Please set the GITHUB_TOKEN environment variable."
+            "Please set the TOKEN environment variable."
         )
 
 def validate_github_app_config() -> None:
     """Validate that the GitHub App configuration is available."""
     missing = []
-    if not GITHUB_APP_ID:
-        missing.append("GITHUB_APP_ID")
-    if not GITHUB_APP_PRIVATE_KEY_PATH:
-        missing.append("GITHUB_APP_PRIVATE_KEY_PATH")
-    if not GITHUB_APP_INSTALLATION_ID:
-        missing.append("GITHUB_APP_INSTALLATION_ID")
+    if not APP_ID:
+        missing.append("APP_ID")
+    if not APP_PRIVATE_KEY and not APP_PRIVATE_KEY_PATH:
+        missing.append("APP_PRIVATE_KEY or APP_PRIVATE_KEY_PATH")
+    if not APP_INSTALLATION_ID:
+        missing.append("APP_INSTALLATION_ID")
         
     if missing:
         raise GithubAppAuthError(
@@ -111,22 +120,32 @@ def generate_jwt() -> str:
         payload = {
             'iat': now,               # Issued at time
             'exp': expiration,        # Expiration time
-            'iss': GITHUB_APP_ID      # GitHub App ID
+            'iss': APP_ID             # GitHub App ID
         }
         
-        # Read private key from file path
-        try:
-            key_path = Path(GITHUB_APP_PRIVATE_KEY_PATH)
-            if (key_path.exists()):
-                with open(key_path, "r") as key_file:
-                    private_key = key_file.read()
-                logger.info(f"Successfully loaded private key from file: {GITHUB_APP_PRIVATE_KEY_PATH}")
-            else:
-                logger.error(f"Private key file not found at: {GITHUB_APP_PRIVATE_KEY_PATH}")
-                raise FileNotFoundError(f"Private key file not found: {GITHUB_APP_PRIVATE_KEY_PATH}")
-        except Exception as e:
-            logger.error(f"Error reading private key file: {str(e)}")
-            raise
+        # Get the private key - either directly from env var or from file
+        private_key = None
+        
+        # First try to use the direct key from environment variable
+        if APP_PRIVATE_KEY:
+            private_key = APP_PRIVATE_KEY
+            logger.info("Using private key directly from environment variable")
+        # Fallback to loading from file path
+        elif APP_PRIVATE_KEY_PATH:
+            try:
+                key_path = Path(APP_PRIVATE_KEY_PATH)
+                if key_path.exists():
+                    with open(key_path, "r") as key_file:
+                        private_key = key_file.read()
+                    logger.info(f"Successfully loaded private key from file: {APP_PRIVATE_KEY_PATH}")
+                else:
+                    logger.error(f"Private key file not found at: {APP_PRIVATE_KEY_PATH}")
+                    raise FileNotFoundError(f"Private key file not found: {APP_PRIVATE_KEY_PATH}")
+            except Exception as e:
+                logger.error(f"Error reading private key file: {str(e)}")
+                raise
+        else:
+            raise GithubAppAuthError("No private key available. Set APP_PRIVATE_KEY or APP_PRIVATE_KEY_PATH")
         
         # Generate the JWT
         token = jwt.encode(
@@ -161,7 +180,7 @@ def get_installation_token() -> str:
         jwt_token = generate_jwt()
         
         # API endpoint for getting an installation token
-        url = f"https://api.github.com/app/installations/{GITHUB_APP_INSTALLATION_ID}/access_tokens"
+        url = f"https://api.github.com/app/installations/{APP_INSTALLATION_ID}/access_tokens"
         
         headers = {
             "Authorization": f"Bearer {jwt_token}",
