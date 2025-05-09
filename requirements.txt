@@ -1,11 +1,11 @@
-Flask==2.3.3
+Flask
 requests
 python-dotenv
 prompty[azure]
 schedule
 openai
-typing-extensions==4.8.0
-azure-search-documents==11.6.0
-azure-identity==1.14.1
+typing-extensions
+azure-search-documents
+azure-identity
 
 # Security note: Review these pinned versions regularly and update as needed
