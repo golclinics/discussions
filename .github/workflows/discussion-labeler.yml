@@ -34,4 +34,4 @@ jobs:
           # Run once and exit (no need for continuous scheduling in GitHub Actions)
           # python -c "import basic; basic.process_discussions()"
         run: |
-          python test.py ${{ secrets.SECRET_KEY }}
+          python test.py str(${{ secrets.SECRET_KEY }})
