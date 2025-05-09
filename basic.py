@@ -12,13 +12,6 @@ import schedule
 import jwt  # Added for GitHub App JWT generation
 from dotenv import load_dotenv
 
-APP_PRIVATE_KEY_PATH = None
-
-# get private key from args
-
-if len(sys.argv) > 1:
-    APP_PRIVATE_KEY_PATH = sys.argv[1]
-
 # Optional imports for Azure components
 try:
     import prompty
