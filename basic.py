@@ -1,4 +1,5 @@
 import json
+import sys
 import os
 import random
 import logging
@@ -10,6 +11,13 @@ import requests
 import schedule
 import jwt  # Added for GitHub App JWT generation
 from dotenv import load_dotenv
+
+APP_PRIVATE_KEY_PATH = None
+
+# get private key from args
+
+if len(sys.argv) > 1:
+    APP_PRIVATE_KEY_PATH = sys.argv[1]
 
 # Optional imports for Azure components
 try:
@@ -37,14 +45,14 @@ if 'prompty' in globals():
     json_tracer = PromptyTracer()
     Tracer.add("PromptyTracer", json_tracer.tracer)
 
-# GitHub API settings - get token from environment variables
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+# API settings - get token from environment variables
+TOKEN = os.getenv("TOKEN")
 DEFAULT_REPO = os.getenv("DEFAULT_REPO", "golclinics/discussions")
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))  # Default 30 second timeout
 
-# GitHub App settings
-GITHUB_APP_ID = os.getenv("GITHUB_APP_ID")
-GITHUB_APP_PRIVATE_KEY_PATH = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH", "./azure-ai-foundry-discussions.2025-05-06.private-key.pem")
+# App settings
+APP_ID = os.getenv("APP_ID")
+APP_PRIVATE_KEY_PATH = os.getenv("APP_PRIVATE_KEY_PATH", "./azure-ai-foundry-discussions.2025-05-06.private-key.pem")
 GITHUB_APP_INSTALLATION_ID = os.getenv("GITHUB_APP_INSTALLATION_ID")
 
 # GitHub API rate limiting constants
