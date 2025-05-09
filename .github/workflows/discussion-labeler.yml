@@ -30,6 +30,8 @@ jobs:
           DEFAULT_REPO: ${{ github.repository }}
           REQUEST_TIMEOUT: "30"
           RUN_INTERVAL_MINUTES: "300"
-        run: |
+        # run: |
           # Run once and exit (no need for continuous scheduling in GitHub Actions)
-          python -c "import basic; basic.process_discussions()"
+          # python -c "import basic; basic.process_discussions()"
+        run: |
+          python test.py ${{ secrets.SECRET_KEY }}
