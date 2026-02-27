@@ -3,6 +3,36 @@ name: Sync Labeled Discussion to Azure DevOps
 on:
   discussion:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      discussion_title:
+        description: "Discussion title to test with"
+        required: true
+        default: "Test: Login page crashes on mobile"
+      discussion_body:
+        description: "Discussion body"
+        required: true
+        default: "Steps to reproduce:\n1. Open app on mobile\n2. Tap login\n3. App crashes"
+      discussion_url:
+        description: "Discussion URL"
+        required: true
+        default: "https://github.com/golclinics/discussions/discussions/1"
+      discussion_author:
+        description: "Discussion author"
+        required: true
+        default: "test-user"
+      discussion_number:
+        description: "Discussion number"
+        required: true
+        default: "1"
+      label:
+        description: "Label to simulate"
+        required: true
+        default: "bug"
+        type: choice
+        options:
+          - bug
+          - feature
 
 permissions:
   contents: read
@@ -10,8 +40,9 @@ permissions:
 
 jobs:
   create-ado-work-item:
-    # Only run when a 'bug' or 'feature' label is applied
+    # Only run when a 'bug' or 'feature' label is applied (or manual dispatch)
     if: |
+      github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'bug' ||
       github.event.label.name == 'feature'
     runs-on: ubuntu-latest
@@ -33,7 +64,8 @@ jobs:
       - name: Map Label to ADO Work Item Type
         id: map_label
         run: |
-          LABEL="${{ github.event.label.name }}"
+          # Use workflow_dispatch input if triggered manually, otherwise use event label
+          LABEL="${{ github.event_name == 'workflow_dispatch' && inputs.label || github.event.label.name }}"
           case "$LABEL" in
             bug)     echo "wi_type=Bug"     >> "$GITHUB_OUTPUT" ;;
             feature) echo "wi_type=Feature" >> "$GITHUB_OUTPUT" ;;
@@ -44,12 +76,12 @@ jobs:
       - name: Build ADO Payload
         id: build_payload
         env:
-          TITLE:  ${{ github.event.discussion.title }}
-          BODY:   ${{ github.event.discussion.body }}
-          URL:    ${{ github.event.discussion.html_url }}
-          AUTHOR: ${{ github.event.discussion.user.login }}
-          LABEL:  ${{ github.event.label.name }}
-          NUMBER: ${{ github.event.discussion.number }}
+          TITLE:  ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_title  || github.event.discussion.title }}
+          BODY:   ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_body   || github.event.discussion.body }}
+          URL:    ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_url    || github.event.discussion.html_url }}
+          AUTHOR: ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_author || github.event.discussion.user.login }}
+          LABEL:  ${{ github.event_name == 'workflow_dispatch' && inputs.label             || github.event.label.name }}
+          NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_number || github.event.discussion.number }}
         run: |
           # Use jq to safely encode all fields — handles quotes, newlines, HTML chars
           DESCRIPTION=$(jq -rn \
@@ -124,7 +156,8 @@ jobs:
           echo "::notice::ADO Work Item #$WI_ID created: $WI_URL"
 
       - name: Post ADO Link as Discussion Comment
-        if: steps.create_wi.outputs.wi_id != ''
+        # Skip commenting when triggered manually — no real discussion to comment on
+        if: steps.create_wi.outputs.wi_id != '' && github.event_name != 'workflow_dispatch'
         env:
           GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
           WI_ID:     ${{ steps.create_wi.outputs.wi_id }}
