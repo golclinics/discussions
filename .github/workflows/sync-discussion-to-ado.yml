@@ -5,26 +5,6 @@ on:
     types: [labeled]
   workflow_dispatch:
     inputs:
-      discussion_title:
-        description: "Discussion title to test with"
-        required: true
-        default: "Test: Login page crashes on mobile"
-      discussion_body:
-        description: "Discussion body"
-        required: true
-        default: "Steps to reproduce:\n1. Open app on mobile\n2. Tap login\n3. App crashes"
-      discussion_url:
-        description: "Discussion URL"
-        required: true
-        default: "https://github.com/golclinics/discussions/discussions/1"
-      discussion_author:
-        description: "Discussion author"
-        required: true
-        default: "test-user"
-      discussion_number:
-        description: "Discussion number"
-        required: true
-        default: "1"
       label:
         description: "Label to simulate"
         required: true
@@ -33,14 +13,33 @@ on:
         options:
           - bug
           - feature
+      discussion_title:
+        description: "Discussion title"
+        required: true
+        default: "Test: Login page crashes on mobile"
+      discussion_body:
+        description: "Discussion body"
+        required: true
+        default: "Steps to reproduce: 1. Open app on mobile 2. Tap login 3. App crashes"
+      discussion_number:
+        description: "Discussion number"
+        required: true
+        default: "1"
+      discussion_url:
+        description: "Discussion URL"
+        required: true
+        default: "https://github.com/golclinics/discussions/discussions/1"
+      discussion_author:
+        description: "Discussion author"
+        required: true
+        default: "test-user"
 
 permissions:
   contents: read
-  discussions: write  # Required to post comment back on discussion
+  discussions: write
 
 jobs:
   create-ado-work-item:
-    # Only run when a 'bug' or 'feature' label is applied (or manual dispatch)
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'bug' ||
@@ -56,35 +55,48 @@ jobs:
           [ -z "${{ secrets.ADO_PROJECT }}" ] && MISSING="$MISSING ADO_PROJECT"
           if [ -n "$MISSING" ]; then
             echo "::error::Missing required secrets:$MISSING"
-            echo "::error::Go to Settings → Secrets and variables → Actions to add them."
             exit 1
           fi
           echo "All required secrets are present."
 
-      - name: Map Label to ADO Work Item Type
+      - name: Resolve Inputs
+        id: inputs
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "label=${{ inputs.label }}"                  >> "$GITHUB_OUTPUT"
+            echo "title=${{ inputs.discussion_title }}"       >> "$GITHUB_OUTPUT"
+            echo "body=${{ inputs.discussion_body }}"         >> "$GITHUB_OUTPUT"
+            echo "number=${{ inputs.discussion_number }}"     >> "$GITHUB_OUTPUT"
+            echo "url=${{ inputs.discussion_url }}"           >> "$GITHUB_OUTPUT"
+            echo "author=${{ inputs.discussion_author }}"     >> "$GITHUB_OUTPUT"
+          else
+            echo "label=${{ github.event.label.name }}"                 >> "$GITHUB_OUTPUT"
+            echo "title=${{ github.event.discussion.title }}"           >> "$GITHUB_OUTPUT"
+            echo "body=${{ github.event.discussion.body }}"             >> "$GITHUB_OUTPUT"
+            echo "number=${{ github.event.discussion.number }}"         >> "$GITHUB_OUTPUT"
+            echo "url=${{ github.event.discussion.html_url }}"          >> "$GITHUB_OUTPUT"
+            echo "author=${{ github.event.discussion.user.login }}"     >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Map Label to Work Item Type
         id: map_label
         run: |
-          # Use workflow_dispatch input if triggered manually, otherwise use event label
-          LABEL="${{ github.event_name == 'workflow_dispatch' && inputs.label || github.event.label.name }}"
-          case "$LABEL" in
+          case "${{ steps.inputs.outputs.label }}" in
             bug)     echo "wi_type=Bug"     >> "$GITHUB_OUTPUT" ;;
             feature) echo "wi_type=Feature" >> "$GITHUB_OUTPUT" ;;
             *)       echo "wi_type=Issue"   >> "$GITHUB_OUTPUT" ;;
           esac
-          echo "Mapped label '$LABEL' → $(grep wi_type $GITHUB_OUTPUT | cut -d= -f2)"
 
       - name: Build ADO Payload
-        id: build_payload
         env:
-          TITLE:  ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_title  || github.event.discussion.title }}
-          BODY:   ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_body   || github.event.discussion.body }}
-          URL:    ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_url    || github.event.discussion.html_url }}
-          AUTHOR: ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_author || github.event.discussion.user.login }}
-          LABEL:  ${{ github.event_name == 'workflow_dispatch' && inputs.label             || github.event.label.name }}
-          NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.discussion_number || github.event.discussion.number }}
+          TITLE:  ${{ steps.inputs.outputs.title }}
+          BODY:   ${{ steps.inputs.outputs.body }}
+          URL:    ${{ steps.inputs.outputs.url }}
+          AUTHOR: ${{ steps.inputs.outputs.author }}
+          LABEL:  ${{ steps.inputs.outputs.label }}
+          NUMBER: ${{ steps.inputs.outputs.number }}
         run: |
-          # Use jq to safely encode all fields — handles quotes, newlines, HTML chars
-          DESCRIPTION=$(jq -rn \
+          DESC=$(jq -rn \
             --arg body   "$BODY" \
             --arg url    "$URL" \
             --arg author "$AUTHOR" \
@@ -95,30 +107,25 @@ jobs:
              "<b>Label:</b> \($label)<br>" +
              "<b>Source:</b> <a href=\"\($url)\">\($url)</a><br><br>" +
              "<hr><b>Description:</b><br>" +
-             ($body | gsub("\\n"; "<br>") | gsub("<"; "&lt;") | gsub(">"; "&gt;") |
-              gsub("&lt;br&gt;"; "<br>"))'
+             ($body | gsub("\n"; "<br>"))'
           )
 
           jq -n \
             --arg title "$TITLE" \
-            --arg desc  "$DESCRIPTION" \
+            --arg desc  "$DESC" \
             --arg label "$LABEL" \
             --arg url   "$URL" \
             '[
-              { "op": "add", "path": "/fields/System.Title",
-                "value": $title },
-              { "op": "add", "path": "/fields/System.Description",
-                "value": $desc },
-              { "op": "add", "path": "/fields/System.Tags",
-                "value": ("github-discussion;" + $label) },
-              { "op": "add", "path": "/fields/System.History",
-                "value": ("Automatically synced from GitHub Discussion. Source: " + $url) }
+              {"op":"add","path":"/fields/System.Title",       "value": $title},
+              {"op":"add","path":"/fields/System.Description", "value": $desc},
+              {"op":"add","path":"/fields/System.Tags",        "value": ("github-discussion;" + $label)},
+              {"op":"add","path":"/fields/System.History",     "value": ("Created from GitHub Discussion: " + $url)}
             ]' > /tmp/ado_payload.json
 
-          echo "Payload:"
+          echo "--- Payload ---"
           cat /tmp/ado_payload.json
 
-      - name: Create Work Item in Azure DevOps
+      - name: Create ADO Work Item
         id: create_wi
         env:
           ADO_PAT:     ${{ secrets.ADO_PAT }}
@@ -126,61 +133,53 @@ jobs:
           ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
           WI_TYPE:     ${{ steps.map_label.outputs.wi_type }}
         run: |
-          ENCODED_PAT=$(printf ':%s' "$ADO_PAT" | base64 -w 0)
-          ENCODED_PROJECT=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$ADO_PROJECT")
+          ENCODED_PROJECT=$(python3 -c \
+            "import urllib.parse, os; print(urllib.parse.quote(os.environ['ADO_PROJECT']))")
+
+          ADO_URL="https://dev.azure.com/${ADO_ORG}/${ENCODED_PROJECT}/_apis/wit/workitems/\$${WI_TYPE}?api-version=7.1"
+          echo "POST -> $ADO_URL"
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST \
-            "https://dev.azure.com/${ADO_ORG}/${ENCODED_PROJECT}/_apis/wit/workitems/\$${WI_TYPE}?api-version=7.1" \
-            -H "Authorization: Basic ${ENCODED_PAT}" \
+            -X POST "$ADO_URL" \
+            --user ":${ADO_PAT}" \
             -H "Content-Type: application/json-patch+json" \
-            --data-binary @/tmp/ado_payload.json)
+            -d @/tmp/ado_payload.json)
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
+          RESP_BODY=$(echo "$RESPONSE" | sed '$d')
 
           echo "HTTP Status: $HTTP_CODE"
-          echo "$BODY" | jq .
+          echo "$RESP_BODY" | jq . || echo "$RESP_BODY"
 
           if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
             echo "::error::ADO API returned HTTP $HTTP_CODE"
-            echo "$BODY" | jq -r '.message // "No message in response"'
+            echo "$RESP_BODY" | jq -r '.message // .'
             exit 1
           fi
 
-          WI_ID=$(echo "$BODY"  | jq -r '.id')
-          WI_URL=$(echo "$BODY" | jq -r '._links.html.href')
-
+          WI_ID=$(echo "$RESP_BODY"  | jq -r '.id')
+          WI_URL=$(echo "$RESP_BODY" | jq -r '._links.html.href')
           echo "wi_id=$WI_ID"   >> "$GITHUB_OUTPUT"
           echo "wi_url=$WI_URL" >> "$GITHUB_OUTPUT"
-          echo "::notice::ADO Work Item #$WI_ID created: $WI_URL"
+          echo "::notice::Work Item #$WI_ID -> $WI_URL"
 
-      - name: Post ADO Link as Discussion Comment
-        # Skip commenting when triggered manually — no real discussion to comment on
+      - name: Comment on Discussion
         if: steps.create_wi.outputs.wi_id != '' && github.event_name != 'workflow_dispatch'
         env:
-          GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
-          WI_ID:     ${{ steps.create_wi.outputs.wi_id }}
-          WI_URL:    ${{ steps.create_wi.outputs.wi_url }}
-          WI_TYPE:   ${{ steps.map_label.outputs.wi_type }}
-          DISC_NUM:  ${{ github.event.discussion.number }}
-          REPO:      ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+          DISC_NUM: ${{ steps.inputs.outputs.number }}
+          WI_ID:    ${{ steps.create_wi.outputs.wi_id }}
+          WI_URL:   ${{ steps.create_wi.outputs.wi_url }}
+          WI_TYPE:  ${{ steps.map_label.outputs.wi_type }}
         run: |
-          COMMENT=$(jq -rn \
-            --arg wi_type "$WI_TYPE" \
-            --arg wi_id   "$WI_ID" \
-            --arg wi_url  "$WI_URL" \
-            '"### ✅ Synced to Azure DevOps\n\n" +
-             "This discussion has been automatically synced to Azure DevOps.\n\n" +
-             "| Field | Value |\n" +
-             "|---|---|\n" +
-             "| **Type** | \($wi_type) |\n" +
-             "| **Work Item** | #\($wi_id) |\n" +
-             "| **Link** | [\($wi_url)](\($wi_url)) |\n\n" +
-             "> _Auto-created by the ADO Sync workflow._"')
-
-          gh api \
-            --method POST \
+          BODY=$(jq -rn \
+            --arg id   "$WI_ID" \
+            --arg url  "$WI_URL" \
+            --arg type "$WI_TYPE" \
+            '"### Synced to Azure DevOps\n\n| Field | Value |\n|---|---|\n| **Type** | \($type) |\n| **ID** | #\($id) |\n| **Link** | \($url) |\n\n> _Auto-created by the ADO Sync workflow._"'
+          )
+          gh api --method POST \
             -H "Accept: application/vnd.github+json" \
             "/repos/$REPO/discussions/$DISC_NUM/comments" \
-            -f body="$COMMENT"
+            -f "body=$BODY"
