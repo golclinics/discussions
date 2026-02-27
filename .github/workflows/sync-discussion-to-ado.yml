@@ -1,0 +1,153 @@
+name: Sync Labeled Discussion to Azure DevOps
+
+on:
+  discussion:
+    types: [labeled]
+
+permissions:
+  contents: read
+  discussions: write  # Required to post comment back on discussion
+
+jobs:
+  create-ado-work-item:
+    # Only run when a 'bug' or 'feature' label is applied
+    if: |
+      github.event.label.name == 'bug' ||
+      github.event.label.name == 'feature'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate Required Secrets
+        run: |
+          MISSING=""
+          [ -z "${{ secrets.ADO_PAT }}"     ] && MISSING="$MISSING ADO_PAT"
+          [ -z "${{ secrets.ADO_ORG }}"     ] && MISSING="$MISSING ADO_ORG"
+          [ -z "${{ secrets.ADO_PROJECT }}" ] && MISSING="$MISSING ADO_PROJECT"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required secrets:$MISSING"
+            echo "::error::Go to Settings → Secrets and variables → Actions to add them."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
+      - name: Map Label to ADO Work Item Type
+        id: map_label
+        run: |
+          LABEL="${{ github.event.label.name }}"
+          case "$LABEL" in
+            bug)     echo "wi_type=Bug"     >> "$GITHUB_OUTPUT" ;;
+            feature) echo "wi_type=Feature" >> "$GITHUB_OUTPUT" ;;
+            *)       echo "wi_type=Issue"   >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Mapped label '$LABEL' → $(grep wi_type $GITHUB_OUTPUT | cut -d= -f2)"
+
+      - name: Build ADO Payload
+        id: build_payload
+        env:
+          TITLE:  ${{ github.event.discussion.title }}
+          BODY:   ${{ github.event.discussion.body }}
+          URL:    ${{ github.event.discussion.html_url }}
+          AUTHOR: ${{ github.event.discussion.user.login }}
+          LABEL:  ${{ github.event.label.name }}
+          NUMBER: ${{ github.event.discussion.number }}
+        run: |
+          # Use jq to safely encode all fields — handles quotes, newlines, HTML chars
+          DESCRIPTION=$(jq -rn \
+            --arg body   "$BODY" \
+            --arg url    "$URL" \
+            --arg author "$AUTHOR" \
+            --arg label  "$LABEL" \
+            --arg number "$NUMBER" \
+            '"<b>GitHub Discussion #\($number)</b><br>" +
+             "<b>Author:</b> \($author)<br>" +
+             "<b>Label:</b> \($label)<br>" +
+             "<b>Source:</b> <a href=\"\($url)\">\($url)</a><br><br>" +
+             "<hr><b>Description:</b><br>" +
+             ($body | gsub("\\n"; "<br>") | gsub("<"; "&lt;") | gsub(">"; "&gt;") |
+              gsub("&lt;br&gt;"; "<br>"))'
+          )
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc  "$DESCRIPTION" \
+            --arg label "$LABEL" \
+            --arg url   "$URL" \
+            '[
+              { "op": "add", "path": "/fields/System.Title",
+                "value": $title },
+              { "op": "add", "path": "/fields/System.Description",
+                "value": $desc },
+              { "op": "add", "path": "/fields/System.Tags",
+                "value": ("github-discussion;" + $label) },
+              { "op": "add", "path": "/fields/System.History",
+                "value": ("Automatically synced from GitHub Discussion. Source: " + $url) }
+            ]' > /tmp/ado_payload.json
+
+          echo "Payload:"
+          cat /tmp/ado_payload.json
+
+      - name: Create Work Item in Azure DevOps
+        id: create_wi
+        env:
+          ADO_PAT:     ${{ secrets.ADO_PAT }}
+          ADO_ORG:     ${{ secrets.ADO_ORG }}
+          ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
+          WI_TYPE:     ${{ steps.map_label.outputs.wi_type }}
+        run: |
+          ENCODED_PAT=$(printf ':%s' "$ADO_PAT" | base64 -w 0)
+          ENCODED_PROJECT=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$ADO_PROJECT")
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            "https://dev.azure.com/${ADO_ORG}/${ENCODED_PROJECT}/_apis/wit/workitems/\$${WI_TYPE}?api-version=7.1" \
+            -H "Authorization: Basic ${ENCODED_PAT}" \
+            -H "Content-Type: application/json-patch+json" \
+            --data-binary @/tmp/ado_payload.json)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "$BODY" | jq .
+
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
+            echo "::error::ADO API returned HTTP $HTTP_CODE"
+            echo "$BODY" | jq -r '.message // "No message in response"'
+            exit 1
+          fi
+
+          WI_ID=$(echo "$BODY"  | jq -r '.id')
+          WI_URL=$(echo "$BODY" | jq -r '._links.html.href')
+
+          echo "wi_id=$WI_ID"   >> "$GITHUB_OUTPUT"
+          echo "wi_url=$WI_URL" >> "$GITHUB_OUTPUT"
+          echo "::notice::ADO Work Item #$WI_ID created: $WI_URL"
+
+      - name: Post ADO Link as Discussion Comment
+        if: steps.create_wi.outputs.wi_id != ''
+        env:
+          GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          WI_ID:     ${{ steps.create_wi.outputs.wi_id }}
+          WI_URL:    ${{ steps.create_wi.outputs.wi_url }}
+          WI_TYPE:   ${{ steps.map_label.outputs.wi_type }}
+          DISC_NUM:  ${{ github.event.discussion.number }}
+          REPO:      ${{ github.repository }}
+        run: |
+          COMMENT=$(jq -rn \
+            --arg wi_type "$WI_TYPE" \
+            --arg wi_id   "$WI_ID" \
+            --arg wi_url  "$WI_URL" \
+            '"### ✅ Synced to Azure DevOps\n\n" +
+             "This discussion has been automatically synced to Azure DevOps.\n\n" +
+             "| Field | Value |\n" +
+             "|---|---|\n" +
+             "| **Type** | \($wi_type) |\n" +
+             "| **Work Item** | #\($wi_id) |\n" +
+             "| **Link** | [\($wi_url)](\($wi_url)) |\n\n" +
+             "> _Auto-created by the ADO Sync workflow._"')
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/$REPO/discussions/$DISC_NUM/comments" \
+            -f body="$COMMENT"
