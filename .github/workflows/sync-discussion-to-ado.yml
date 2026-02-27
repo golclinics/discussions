@@ -50,14 +50,17 @@ jobs:
       - name: Validate Required Secrets
         run: |
           MISSING=""
-          [ -z "${{ secrets.ADO_PAT }}"     ] && MISSING="$MISSING ADO_PAT"
-          [ -z "${{ secrets.ADO_ORG }}"     ] && MISSING="$MISSING ADO_ORG"
-          [ -z "${{ secrets.ADO_PROJECT }}" ] && MISSING="$MISSING ADO_PROJECT"
+          [ -z "${{ secrets.ADO_PAT }}"  ] && MISSING="$MISSING ADO_PAT (secret)"
+          [ -z "${{ vars.ADO_ORG }}"     ] && MISSING="$MISSING ADO_ORG (variable)"
+          [ -z "${{ vars.ADO_PROJECT }}" ] && MISSING="$MISSING ADO_PROJECT (variable)"
           if [ -n "$MISSING" ]; then
-            echo "::error::Missing required secrets:$MISSING"
+            echo "::error::Missing required config:$MISSING"
+            echo "::error::ADO_PAT must be a Secret. ADO_ORG and ADO_PROJECT must be Variables (not Secrets)."
             exit 1
           fi
-          echo "All required secrets are present."
+          echo "ADO_ORG:     ${{ vars.ADO_ORG }}"
+          echo "ADO_PROJECT: ${{ vars.ADO_PROJECT }}"
+          echo "ADO_PAT:     [set]"
 
       - name: Resolve Inputs
         id: inputs
@@ -129,8 +132,8 @@ jobs:
         id: create_wi
         env:
           ADO_PAT:     ${{ secrets.ADO_PAT }}
-          ADO_ORG:     ${{ secrets.ADO_ORG }}
-          ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
+          ADO_ORG:     ${{ vars.ADO_ORG }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
           WI_TYPE:     ${{ steps.map_label.outputs.wi_type }}
         run: |
           ENCODED_PROJECT=$(python3 -c \
