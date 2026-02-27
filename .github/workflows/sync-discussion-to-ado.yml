@@ -128,18 +128,45 @@ jobs:
           echo "--- Payload ---"
           cat /tmp/ado_payload.json
 
-      - name: Create ADO Work Item
-        id: create_wi
+      - name: Resolve ADO Project ID
+        id: resolve_project
         env:
           ADO_PAT:     ${{ secrets.ADO_PAT }}
           ADO_ORG:     ${{ vars.ADO_ORG }}
           ADO_PROJECT: ${{ vars.ADO_PROJECT }}
-          WI_TYPE:     ${{ steps.map_label.outputs.wi_type }}
         run: |
-          ENCODED_PROJECT=$(python3 -c \
-            "import urllib.parse, os; print(urllib.parse.quote(os.environ['ADO_PROJECT']))")
+          # Fetch project GUID — avoids colon/space issues in project names
+          PROJECTS=$(curl -s \
+            "https://dev.azure.com/${ADO_ORG}/_apis/projects?api-version=7.1" \
+            --user ":${ADO_PAT}")
 
-          ADO_URL="https://dev.azure.com/${ADO_ORG}/${ENCODED_PROJECT}/_apis/wit/workitems/\$${WI_TYPE}?api-version=7.1"
+          echo "Projects response:"
+          echo "$PROJECTS" | jq '[.value[] | {name, id}]'
+
+          PROJECT_ID=$(echo "$PROJECTS" | jq -r \
+            --arg name "$ADO_PROJECT" \
+            '.value[] | select(.name == $name) | .id')
+
+          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+            echo "::error::Could not find project '$ADO_PROJECT' in org '$ADO_ORG'."
+            echo "::error::Available projects:"
+            echo "$PROJECTS" | jq -r '.value[].name'
+            exit 1
+          fi
+
+          echo "Resolved '$ADO_PROJECT' -> $PROJECT_ID"
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Create ADO Work Item
+        id: create_wi
+        env:
+          ADO_PAT:        ${{ secrets.ADO_PAT }}
+          ADO_ORG:        ${{ vars.ADO_ORG }}
+          PROJECT_ID:     ${{ steps.resolve_project.outputs.project_id }}
+          WI_TYPE:        ${{ steps.map_label.outputs.wi_type }}
+        run: |
+          # Use the project GUID in the URL — no encoding issues with colons or spaces
+          ADO_URL="https://dev.azure.com/${ADO_ORG}/${PROJECT_ID}/_apis/wit/workitems/\$${WI_TYPE}?api-version=7.1"
           echo "POST -> $ADO_URL"
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
