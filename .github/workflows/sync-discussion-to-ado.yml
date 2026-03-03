@@ -60,39 +60,39 @@ jobs:
       - name: Resolve Inputs
         id: inputs
         env:
-          # Map all untrusted context values to env vars to prevent script injection
-          EVENT_LABEL:   ${{ github.event.label.name }}
-          EVENT_TITLE:   ${{ github.event.discussion.title }}
-          EVENT_BODY:    ${{ github.event.discussion.body }}
-          EVENT_NUMBER:  ${{ github.event.discussion.number }}
-          EVENT_URL:     ${{ github.event.discussion.html_url }}
-          EVENT_AUTHOR:  ${{ github.event.discussion.user.login }}
-          EVENT_CREATED: ${{ github.event.discussion.created_at }}
-          INPUT_LABEL:   ${{ inputs.label }}
-          INPUT_TITLE:   ${{ inputs.discussion_title }}
-          INPUT_BODY:    ${{ inputs.discussion_body }}
-          INPUT_NUMBER:  ${{ inputs.discussion_number }}
-          INPUT_URL:     ${{ inputs.discussion_url }}
-          INPUT_AUTHOR:  ${{ inputs.discussion_author }}
+          # Single-line values — safe as plain env vars
+          EVENT_LABEL:        ${{ github.event.label.name }}
+          EVENT_NUMBER:       ${{ github.event.discussion.number }}
+          EVENT_URL:          ${{ github.event.discussion.html_url }}
+          EVENT_AUTHOR:       ${{ github.event.discussion.user.login }}
+          EVENT_CREATED:      ${{ github.event.discussion.created_at }}
+          INPUT_LABEL:        ${{ inputs.label }}
+          INPUT_NUMBER:       ${{ inputs.discussion_number }}
+          INPUT_URL:          ${{ inputs.discussion_url }}
+          INPUT_AUTHOR:       ${{ inputs.discussion_author }}
+          # Multiline values — toJSON() encodes newlines as \n making them single-line safe
+          EVENT_TITLE_JSON:   ${{ toJSON(github.event.discussion.title) }}
+          EVENT_BODY_JSON:    ${{ toJSON(github.event.discussion.body) }}
+          INPUT_TITLE_JSON:   ${{ toJSON(inputs.discussion_title) }}
+          INPUT_BODY_JSON:    ${{ toJSON(inputs.discussion_body) }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Only safe single-line values go through GITHUB_OUTPUT
             echo "label=$INPUT_LABEL"                           >> "$GITHUB_OUTPUT"
             echo "number=$INPUT_NUMBER"                         >> "$GITHUB_OUTPUT"
             echo "url=$INPUT_URL"                               >> "$GITHUB_OUTPUT"
             echo "author=$INPUT_AUTHOR"                         >> "$GITHUB_OUTPUT"
             echo "created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
-            # Write user content to temp files — never route through GITHUB_OUTPUT
-            printf '%s' "$INPUT_TITLE" > /tmp/discussion_title.txt
-            printf '%s' "$INPUT_BODY"  > /tmp/discussion_body.txt
+            # Decode JSON-encoded strings into temp files — safe for any content
+            printf '%s' "$INPUT_TITLE_JSON" | jq -r . > /tmp/discussion_title.txt
+            printf '%s' "$INPUT_BODY_JSON"  | jq -r . > /tmp/discussion_body.txt
           else
             echo "label=$EVENT_LABEL"                           >> "$GITHUB_OUTPUT"
             echo "number=$EVENT_NUMBER"                         >> "$GITHUB_OUTPUT"
             echo "url=$EVENT_URL"                               >> "$GITHUB_OUTPUT"
             echo "author=$EVENT_AUTHOR"                         >> "$GITHUB_OUTPUT"
             echo "created_at=$EVENT_CREATED"                    >> "$GITHUB_OUTPUT"
-            printf '%s' "$EVENT_TITLE" > /tmp/discussion_title.txt
-            printf '%s' "$EVENT_BODY"  > /tmp/discussion_body.txt
+            printf '%s' "$EVENT_TITLE_JSON" | jq -r . > /tmp/discussion_title.txt
+            printf '%s' "$EVENT_BODY_JSON"  | jq -r . > /tmp/discussion_body.txt
           fi
 
       - name: Build Payload
