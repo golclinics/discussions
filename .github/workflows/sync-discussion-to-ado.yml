@@ -76,21 +76,33 @@ jobs:
           INPUT_AUTHOR:  ${{ inputs.discussion_author }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "label=$INPUT_LABEL"                    >> "$GITHUB_OUTPUT"
-            echo "title=$INPUT_TITLE"                    >> "$GITHUB_OUTPUT"
-            echo "body=$INPUT_BODY"                      >> "$GITHUB_OUTPUT"
-            echo "number=$INPUT_NUMBER"                  >> "$GITHUB_OUTPUT"
-            echo "url=$INPUT_URL"                        >> "$GITHUB_OUTPUT"
-            echo "author=$INPUT_AUTHOR"                  >> "$GITHUB_OUTPUT"
-            echo "created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
+            echo "label=$INPUT_LABEL"                              >> "$GITHUB_OUTPUT"
+            echo "number=$INPUT_NUMBER"                            >> "$GITHUB_OUTPUT"
+            echo "url=$INPUT_URL"                                  >> "$GITHUB_OUTPUT"
+            echo "author=$INPUT_AUTHOR"                            >> "$GITHUB_OUTPUT"
+            echo "created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")"    >> "$GITHUB_OUTPUT"
+            # Multiline-safe output for title and body
+            DELIM=$(openssl rand -hex 8)
+            echo "title<<$DELIM"  >> "$GITHUB_OUTPUT"
+            echo "$INPUT_TITLE"   >> "$GITHUB_OUTPUT"
+            echo "$DELIM"         >> "$GITHUB_OUTPUT"
+            echo "body<<$DELIM"   >> "$GITHUB_OUTPUT"
+            echo "$INPUT_BODY"    >> "$GITHUB_OUTPUT"
+            echo "$DELIM"         >> "$GITHUB_OUTPUT"
           else
-            echo "label=$EVENT_LABEL"                    >> "$GITHUB_OUTPUT"
-            echo "title=$EVENT_TITLE"                    >> "$GITHUB_OUTPUT"
-            echo "body=$EVENT_BODY"                      >> "$GITHUB_OUTPUT"
-            echo "number=$EVENT_NUMBER"                  >> "$GITHUB_OUTPUT"
-            echo "url=$EVENT_URL"                        >> "$GITHUB_OUTPUT"
-            echo "author=$EVENT_AUTHOR"                  >> "$GITHUB_OUTPUT"
-            echo "created_at=$EVENT_CREATED"             >> "$GITHUB_OUTPUT"
+            echo "label=$EVENT_LABEL"                              >> "$GITHUB_OUTPUT"
+            echo "number=$EVENT_NUMBER"                            >> "$GITHUB_OUTPUT"
+            echo "url=$EVENT_URL"                                  >> "$GITHUB_OUTPUT"
+            echo "author=$EVENT_AUTHOR"                            >> "$GITHUB_OUTPUT"
+            echo "created_at=$EVENT_CREATED"                       >> "$GITHUB_OUTPUT"
+            # Multiline-safe output for title and body
+            DELIM=$(openssl rand -hex 8)
+            echo "title<<$DELIM"  >> "$GITHUB_OUTPUT"
+            echo "$EVENT_TITLE"   >> "$GITHUB_OUTPUT"
+            echo "$DELIM"         >> "$GITHUB_OUTPUT"
+            echo "body<<$DELIM"   >> "$GITHUB_OUTPUT"
+            echo "$EVENT_BODY"    >> "$GITHUB_OUTPUT"
+            echo "$DELIM"         >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Payload
