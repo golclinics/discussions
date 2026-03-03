@@ -1,4 +1,4 @@
-name: Sync Labeled Discussion to Azure DevOps
+name: Sync Labeled Discussion to Power Automate
 
 on:
   discussion:
@@ -39,7 +39,7 @@ permissions:
   discussions: write
 
 jobs:
-  create-ado-work-item:
+  send-to-power-automate:
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == 'bug' ||
@@ -50,164 +50,118 @@ jobs:
       - name: Validate Required Secrets
         run: |
           MISSING=""
-          [ -z "${{ secrets.ADO_PAT }}"  ] && MISSING="$MISSING ADO_PAT (secret)"
-          [ -z "${{ vars.ADO_ORG }}"     ] && MISSING="$MISSING ADO_ORG (variable)"
-          [ -z "${{ vars.ADO_PROJECT }}" ] && MISSING="$MISSING ADO_PROJECT (variable)"
+          [ -z "${{ secrets.POWER_AUTOMATE_WEBHOOK_URL }}" ] && MISSING="$MISSING POWER_AUTOMATE_WEBHOOK_URL (secret)"
           if [ -n "$MISSING" ]; then
             echo "::error::Missing required config:$MISSING"
-            echo "::error::ADO_PAT must be a Secret. ADO_ORG and ADO_PROJECT must be Variables (not Secrets)."
             exit 1
           fi
-          echo "ADO_ORG:     ${{ vars.ADO_ORG }}"
-          echo "ADO_PROJECT: ${{ vars.ADO_PROJECT }}"
-          echo "ADO_PAT:     [set]"
+          echo "POWER_AUTOMATE_WEBHOOK_URL: [set]"
 
       - name: Resolve Inputs
         id: inputs
+        env:
+          # Map all untrusted context values to env vars to prevent script injection
+          EVENT_LABEL:   ${{ github.event.label.name }}
+          EVENT_TITLE:   ${{ github.event.discussion.title }}
+          EVENT_BODY:    ${{ github.event.discussion.body }}
+          EVENT_NUMBER:  ${{ github.event.discussion.number }}
+          EVENT_URL:     ${{ github.event.discussion.html_url }}
+          EVENT_AUTHOR:  ${{ github.event.discussion.user.login }}
+          EVENT_CREATED: ${{ github.event.discussion.created_at }}
+          INPUT_LABEL:   ${{ inputs.label }}
+          INPUT_TITLE:   ${{ inputs.discussion_title }}
+          INPUT_BODY:    ${{ inputs.discussion_body }}
+          INPUT_NUMBER:  ${{ inputs.discussion_number }}
+          INPUT_URL:     ${{ inputs.discussion_url }}
+          INPUT_AUTHOR:  ${{ inputs.discussion_author }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "label=${{ inputs.label }}"                  >> "$GITHUB_OUTPUT"
-            echo "title=${{ inputs.discussion_title }}"       >> "$GITHUB_OUTPUT"
-            echo "body=${{ inputs.discussion_body }}"         >> "$GITHUB_OUTPUT"
-            echo "number=${{ inputs.discussion_number }}"     >> "$GITHUB_OUTPUT"
-            echo "url=${{ inputs.discussion_url }}"           >> "$GITHUB_OUTPUT"
-            echo "author=${{ inputs.discussion_author }}"     >> "$GITHUB_OUTPUT"
+            echo "label=$INPUT_LABEL"                    >> "$GITHUB_OUTPUT"
+            echo "title=$INPUT_TITLE"                    >> "$GITHUB_OUTPUT"
+            echo "body=$INPUT_BODY"                      >> "$GITHUB_OUTPUT"
+            echo "number=$INPUT_NUMBER"                  >> "$GITHUB_OUTPUT"
+            echo "url=$INPUT_URL"                        >> "$GITHUB_OUTPUT"
+            echo "author=$INPUT_AUTHOR"                  >> "$GITHUB_OUTPUT"
+            echo "created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
           else
-            echo "label=${{ github.event.label.name }}"                 >> "$GITHUB_OUTPUT"
-            echo "title=${{ github.event.discussion.title }}"           >> "$GITHUB_OUTPUT"
-            echo "body=${{ github.event.discussion.body }}"             >> "$GITHUB_OUTPUT"
-            echo "number=${{ github.event.discussion.number }}"         >> "$GITHUB_OUTPUT"
-            echo "url=${{ github.event.discussion.html_url }}"          >> "$GITHUB_OUTPUT"
-            echo "author=${{ github.event.discussion.user.login }}"     >> "$GITHUB_OUTPUT"
+            echo "label=$EVENT_LABEL"                    >> "$GITHUB_OUTPUT"
+            echo "title=$EVENT_TITLE"                    >> "$GITHUB_OUTPUT"
+            echo "body=$EVENT_BODY"                      >> "$GITHUB_OUTPUT"
+            echo "number=$EVENT_NUMBER"                  >> "$GITHUB_OUTPUT"
+            echo "url=$EVENT_URL"                        >> "$GITHUB_OUTPUT"
+            echo "author=$EVENT_AUTHOR"                  >> "$GITHUB_OUTPUT"
+            echo "created_at=$EVENT_CREATED"             >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Map Label to Work Item Type
-        id: map_label
-        run: |
-          case "${{ steps.inputs.outputs.label }}" in
-            bug)     echo "wi_type=Bug"     >> "$GITHUB_OUTPUT" ;;
-            feature) echo "wi_type=Feature" >> "$GITHUB_OUTPUT" ;;
-            *)       echo "wi_type=Issue"   >> "$GITHUB_OUTPUT" ;;
-          esac
-
-      - name: Build ADO Payload
+      - name: Build Payload
         env:
-          TITLE:  ${{ steps.inputs.outputs.title }}
-          BODY:   ${{ steps.inputs.outputs.body }}
-          URL:    ${{ steps.inputs.outputs.url }}
-          AUTHOR: ${{ steps.inputs.outputs.author }}
-          LABEL:  ${{ steps.inputs.outputs.label }}
-          NUMBER: ${{ steps.inputs.outputs.number }}
+          TITLE:   ${{ steps.inputs.outputs.title }}
+          BODY:    ${{ steps.inputs.outputs.body }}
+          URL:     ${{ steps.inputs.outputs.url }}
+          AUTHOR:  ${{ steps.inputs.outputs.author }}
+          LABEL:   ${{ steps.inputs.outputs.label }}
+          NUMBER:  ${{ steps.inputs.outputs.number }}
+          CREATED: ${{ steps.inputs.outputs.created_at }}
+          REPO:    ${{ github.repository }}
         run: |
-          DESC=$(jq -rn \
-            --arg body   "$BODY" \
-            --arg url    "$URL" \
-            --arg author "$AUTHOR" \
-            --arg label  "$LABEL" \
-            --arg number "$NUMBER" \
-            '"<b>GitHub Discussion #\($number)</b><br>" +
-             "<b>Author:</b> \($author)<br>" +
-             "<b>Label:</b> \($label)<br>" +
-             "<b>Source:</b> <a href=\"\($url)\">\($url)</a><br><br>" +
-             "<hr><b>Description:</b><br>" +
-             ($body | gsub("\n"; "<br>"))'
-          )
-
           jq -n \
-            --arg title "$TITLE" \
-            --arg desc  "$DESC" \
-            --arg label "$LABEL" \
-            --arg url   "$URL" \
-            '[
-              {"op":"add","path":"/fields/System.Title",       "value": $title},
-              {"op":"add","path":"/fields/System.Description", "value": $desc},
-              {"op":"add","path":"/fields/System.Tags",        "value": ("github-discussion;" + $label)},
-              {"op":"add","path":"/fields/System.History",     "value": ("Created from GitHub Discussion: " + $url)}
-            ]' > /tmp/ado_payload.json
+            --arg number   "$NUMBER" \
+            --arg title    "$TITLE" \
+            --arg body     "$BODY" \
+            --arg author   "$AUTHOR" \
+            --arg label    "$LABEL" \
+            --arg url      "$URL" \
+            --arg repo     "$REPO" \
+            --arg created  "$CREATED" \
+            '{
+              number:     ($number | tonumber),
+              title:      $title,
+              body:       $body,
+              author:     $author,
+              label:      $label,
+              url:        $url,
+              repository: $repo,
+              created_at: $created
+            }' > /tmp/pa_payload.json
 
           echo "--- Payload ---"
-          cat /tmp/ado_payload.json
+          cat /tmp/pa_payload.json
 
-      - name: Resolve ADO Project ID
-        id: resolve_project
+      - name: Send to Power Automate
+        id: send
         env:
-          ADO_PAT:     ${{ secrets.ADO_PAT }}
-          ADO_ORG:     ${{ vars.ADO_ORG }}
-          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+          WEBHOOK_URL: ${{ secrets.POWER_AUTOMATE_WEBHOOK_URL }}
         run: |
-          # Fetch project GUID — avoids colon/space issues in project names
-          PROJECTS=$(curl -s \
-            "https://dev.azure.com/${ADO_ORG}/_apis/projects?api-version=7.1" \
-            --user ":${ADO_PAT}")
-
-          echo "Projects response:"
-          echo "$PROJECTS" | jq '[.value[] | {name, id}]'
-
-          PROJECT_ID=$(echo "$PROJECTS" | jq -r \
-            --arg name "$ADO_PROJECT" \
-            '.value[] | select(.name == $name) | .id')
-
-          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
-            echo "::error::Could not find project '$ADO_PROJECT' in org '$ADO_ORG'."
-            echo "::error::Available projects:"
-            echo "$PROJECTS" | jq -r '.value[].name'
-            exit 1
-          fi
-
-          echo "Resolved '$ADO_PROJECT' -> $PROJECT_ID"
-          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Create ADO Work Item
-        id: create_wi
-        env:
-          ADO_PAT:        ${{ secrets.ADO_PAT }}
-          ADO_ORG:        ${{ vars.ADO_ORG }}
-          PROJECT_ID:     ${{ steps.resolve_project.outputs.project_id }}
-          WI_TYPE:        ${{ steps.map_label.outputs.wi_type }}
-        run: |
-          # Use the project GUID in the URL — no encoding issues with colons or spaces
-          ADO_URL="https://dev.azure.com/${ADO_ORG}/${PROJECT_ID}/_apis/wit/workitems/\$${WI_TYPE}?api-version=7.1"
-          echo "POST -> $ADO_URL"
-
           RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST "$ADO_URL" \
-            --user ":${ADO_PAT}" \
-            -H "Content-Type: application/json-patch+json" \
-            -d @/tmp/ado_payload.json)
+            -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/pa_payload.json)
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           RESP_BODY=$(echo "$RESPONSE" | sed '$d')
 
           echo "HTTP Status: $HTTP_CODE"
-          echo "$RESP_BODY" | jq . || echo "$RESP_BODY"
+          echo "$RESP_BODY"
 
-          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ]; then
-            echo "::error::ADO API returned HTTP $HTTP_CODE"
-            echo "$RESP_BODY" | jq -r '.message // .'
+          # Power Automate returns 202 Accepted for async flows
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "202" ]; then
+            echo "::error::Power Automate webhook returned HTTP $HTTP_CODE"
             exit 1
           fi
 
-          WI_ID=$(echo "$RESP_BODY"  | jq -r '.id')
-          WI_URL=$(echo "$RESP_BODY" | jq -r '._links.html.href')
-          echo "wi_id=$WI_ID"   >> "$GITHUB_OUTPUT"
-          echo "wi_url=$WI_URL" >> "$GITHUB_OUTPUT"
-          echo "::notice::Work Item #$WI_ID -> $WI_URL"
+          echo "::notice::Successfully sent discussion #${{ steps.inputs.outputs.number }} to Power Automate"
 
       - name: Comment on Discussion
-        if: steps.create_wi.outputs.wi_id != '' && github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
           DISC_NUM: ${{ steps.inputs.outputs.number }}
-          WI_ID:    ${{ steps.create_wi.outputs.wi_id }}
-          WI_URL:   ${{ steps.create_wi.outputs.wi_url }}
-          WI_TYPE:  ${{ steps.map_label.outputs.wi_type }}
+          LABEL:    ${{ steps.inputs.outputs.label }}
         run: |
           BODY=$(jq -rn \
-            --arg id   "$WI_ID" \
-            --arg url  "$WI_URL" \
-            --arg type "$WI_TYPE" \
-            '"### Synced to Azure DevOps\n\n| Field | Value |\n|---|---|\n| **Type** | \($type) |\n| **ID** | #\($id) |\n| **Link** | \($url) |\n\n> _Auto-created by the ADO Sync workflow._"'
+            --arg label "$LABEL" \
+            '"### Synced to Power Automate\n\n| Field | Value |\n|---|---|\n| **Label** | \($label) |\n| **Status** | Sent for processing |\n\n> _Auto-triggered by the Power Automate Sync workflow._"'
           )
           gh api --method POST \
             -H "Accept: application/vnd.github+json" \
