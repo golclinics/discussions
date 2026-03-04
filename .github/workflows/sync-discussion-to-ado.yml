@@ -24,23 +24,18 @@ on:
       discussion_title:
         description: "Discussion title (send action only)"
         required: false
-        default: "Test: Login page crashes on mobile"
       discussion_body:
         description: "Discussion body (send action only)"
         required: false
-        default: "Steps to reproduce: 1. Open app on mobile 2. Tap login 3. App crashes"
       discussion_number:
         description: "Discussion number (send action only)"
         required: false
-        default: "1"
       discussion_url:
         description: "Discussion URL (send action only)"
         required: false
-        default: "https://github.com/golclinics/discussions/discussions/1"
       discussion_author:
         description: "Discussion author (send action only)"
         required: false
-        default: "test-user"
 
 permissions:
   contents: read
