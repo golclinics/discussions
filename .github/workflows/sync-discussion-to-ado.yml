@@ -5,33 +5,41 @@ on:
     types: [labeled]
   workflow_dispatch:
     inputs:
-      label:
-        description: "Label to simulate"
+      action:
+        description: "Action to perform"
         required: true
+        default: "send"
+        type: choice
+        options:
+          - send
+          - backfill-triage
+      label:
+        description: "Label to simulate (send action only)"
+        required: false
         default: "bug"
         type: choice
         options:
           - bug
           - feature
       discussion_title:
-        description: "Discussion title"
-        required: true
+        description: "Discussion title (send action only)"
+        required: false
         default: "Test: Login page crashes on mobile"
       discussion_body:
-        description: "Discussion body"
-        required: true
+        description: "Discussion body (send action only)"
+        required: false
         default: "Steps to reproduce: 1. Open app on mobile 2. Tap login 3. App crashes"
       discussion_number:
-        description: "Discussion number"
-        required: true
+        description: "Discussion number (send action only)"
+        required: false
         default: "1"
       discussion_url:
-        description: "Discussion URL"
-        required: true
+        description: "Discussion URL (send action only)"
+        required: false
         default: "https://github.com/golclinics/discussions/discussions/1"
       discussion_author:
-        description: "Discussion author"
-        required: true
+        description: "Discussion author (send action only)"
+        required: false
         default: "test-user"
 
 permissions:
@@ -41,7 +49,7 @@ permissions:
 jobs:
   send-to-power-automate:
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'send') ||
       github.event.label.name == 'bug' ||
       github.event.label.name == 'feature'
     runs-on: ubuntu-latest
@@ -155,19 +163,180 @@ jobs:
 
           echo "::notice::Successfully sent discussion #${{ steps.inputs.outputs.number }} to Power Automate"
 
-      - name: Comment on Discussion
+      - name: Apply Triaged Label
         if: github.event_name != 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO:     ${{ github.repository }}
           DISC_NUM: ${{ steps.inputs.outputs.number }}
-          LABEL:    ${{ steps.inputs.outputs.label }}
         run: |
-          BODY=$(jq -rn \
-            --arg label "$LABEL" \
-            '"### Synced to Power Automate\n\n| Field | Value |\n|---|---|\n| **Label** | \($label) |\n| **Status** | Sent for processing |\n\n> _Auto-triggered by the Power Automate Sync workflow._"'
-          )
-          gh api --method POST \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/$REPO/discussions/$DISC_NUM/comments" \
-            -f "body=$BODY"
+          OWNER="${REPO%/*}"
+          REPO_NAME="${REPO#*/}"
+
+          # Get triaged label ID, create the label if it doesn't exist
+          LABEL_ID=$(gh api graphql \
+            -f query='query($owner: String!, $repo: String!) {
+              repository(owner: $owner, name: $repo) {
+                label(name: "triaged") { id }
+              }
+            }' \
+            -f owner="$OWNER" \
+            -f repo="$REPO_NAME" \
+            --jq '.data.repository.label.id')
+
+          if [ -z "$LABEL_ID" ] || [ "$LABEL_ID" = "null" ]; then
+            echo "Creating 'triaged' label..."
+            REPO_NODE_ID=$(gh api graphql \
+              -f query='query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) { id }
+              }' \
+              -f owner="$OWNER" \
+              -f repo="$REPO_NAME" \
+              --jq '.data.repository.id')
+            LABEL_ID=$(gh api graphql \
+              -f query='mutation($repoId: ID!, $name: String!, $color: String!) {
+                createLabel(input: {repositoryId: $repoId, name: $name, color: $color}) {
+                  label { id }
+                }
+              }' \
+              -f name="triaged" \
+              -f color="0e8a16" \
+              -f repoId="$REPO_NODE_ID" \
+              --jq '.data.createLabel.label.id')
+          fi
+
+          # Get discussion node ID
+          DISC_NODE_ID=$(gh api graphql \
+            -f query='query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                discussion(number: $number) { id }
+              }
+            }' \
+            -f owner="$OWNER" \
+            -f repo="$REPO_NAME" \
+            -F number="$DISC_NUM" \
+            --jq '.data.repository.discussion.id')
+
+          # Apply triaged label to the discussion
+          gh api graphql \
+            -f query='mutation($labelableId: ID!, $labelIds: [ID!]!) {
+              addLabelsToLabelable(input: {labelableId: $labelableId, labelIds: $labelIds}) {
+                labelable { ... on Discussion { number } }
+              }
+            }' \
+            -f labelableId="$DISC_NODE_ID" \
+            -f "labelIds[]=$LABEL_ID"
+
+          echo "::notice::Applied 'triaged' label to discussion #$DISC_NUM"
+
+  backfill-triage:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'backfill-triage'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Apply Triaged Label to Unprocessed Discussions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
+        run: |
+          OWNER="${REPO%/*}"
+          REPO_NAME="${REPO#*/}"
+
+          # Get triaged label ID, create it if missing
+          LABEL_ID=$(gh api graphql \
+            -f query='query($owner: String!, $repo: String!) {
+              repository(owner: $owner, name: $repo) {
+                label(name: "triaged") { id }
+              }
+            }' \
+            -f owner="$OWNER" \
+            -f repo="$REPO_NAME" \
+            --jq '.data.repository.label.id')
+
+          if [ -z "$LABEL_ID" ] || [ "$LABEL_ID" = "null" ]; then
+            echo "Creating 'triaged' label..."
+            REPO_NODE_ID=$(gh api graphql \
+              -f query='query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) { id }
+              }' \
+              -f owner="$OWNER" \
+              -f repo="$REPO_NAME" \
+              --jq '.data.repository.id')
+            LABEL_ID=$(gh api graphql \
+              -f query='mutation($repoId: ID!, $name: String!, $color: String!) {
+                createLabel(input: {repositoryId: $repoId, name: $name, color: $color}) {
+                  label { id }
+                }
+              }' \
+              -f name="triaged" \
+              -f color="0e8a16" \
+              -f repoId="$REPO_NODE_ID" \
+              --jq '.data.createLabel.label.id')
+          fi
+
+          echo "Triaged label ID: $LABEL_ID"
+
+          # Paginate through all discussions; apply triaged to those with bug/feature but not triaged
+          CURSOR=""
+          TOTAL=0
+          while true; do
+            if [ -z "$CURSOR" ]; then
+              AFTER_ARG=""
+            else
+              AFTER_ARG=", after: \\\"$CURSOR\\\""
+            fi
+
+            PAGE=$(gh api graphql \
+              -f query="query(\$owner: String!, \$repo: String!) {
+                repository(owner: \$owner, name: \$repo) {
+                  discussions(first: 50$AFTER_ARG) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      id
+                      number
+                      labels(first: 20) {
+                        nodes { name }
+                      }
+                    }
+                  }
+                }
+              }" \
+              -f owner="$OWNER" \
+              -f repo="$REPO_NAME")
+
+            HAS_NEXT=$(echo "$PAGE" | jq -r '.data.repository.discussions.pageInfo.hasNextPage')
+            CURSOR=$(echo "$PAGE"   | jq -r '.data.repository.discussions.pageInfo.endCursor')
+
+            # Select discussions that have bug or feature but not triaged
+            DISC_IDS=$(echo "$PAGE" | jq -r '
+              .data.repository.discussions.nodes[]
+              | select(
+                  (.labels.nodes | map(.name) | (contains(["bug"]) or contains(["feature"])))
+                  and
+                  (.labels.nodes | map(.name) | contains(["triaged"]) | not)
+                )
+              | .id + " " + (.number | tostring)
+            ')
+
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              DISC_ID=$(echo  "$line" | cut -d' ' -f1)
+              DISC_NUM=$(echo "$line" | cut -d' ' -f2)
+
+              gh api graphql \
+                -f query='mutation($labelableId: ID!, $labelIds: [ID!]!) {
+                  addLabelsToLabelable(input: {labelableId: $labelableId, labelIds: $labelIds}) {
+                    labelable { ... on Discussion { number } }
+                  }
+                }' \
+                -f labelableId="$DISC_ID" \
+                -f "labelIds[]=$LABEL_ID"
+
+              echo "Triaged discussion #$DISC_NUM"
+              TOTAL=$((TOTAL + 1))
+            done <<< "$DISC_IDS"
+
+            [ "$HAS_NEXT" != "true" ] && break
+          done
+
+          echo "::notice::Backfill complete — applied 'triaged' label to $TOTAL discussion(s)"
