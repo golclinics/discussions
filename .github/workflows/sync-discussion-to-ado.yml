@@ -136,24 +136,47 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.POWER_AUTOMATE_WEBHOOK_URL }}
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d @/tmp/pa_payload.json)
+          MAX_RETRIES=3
+          RETRY_DELAY=5
+          ATTEMPT=0
 
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          RESP_BODY=$(echo "$RESPONSE" | sed '$d')
+          while [ $ATTEMPT -lt $MAX_RETRIES ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT of $MAX_RETRIES"
 
-          echo "HTTP Status: $HTTP_CODE"
-          echo "$RESP_BODY"
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST "$WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d @/tmp/pa_payload.json)
 
-          # Power Automate returns 202 Accepted for async flows
-          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "202" ]; then
-            echo "::error::Power Automate webhook returned HTTP $HTTP_CODE"
-            exit 1
-          fi
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            RESP_BODY=$(echo "$RESPONSE" | sed '$d')
 
-          echo "::notice::Successfully sent discussion #${{ steps.inputs.outputs.number }} to Power Automate"
+            echo "HTTP Status: $HTTP_CODE"
+            echo "$RESP_BODY"
+
+            # Power Automate returns 202 Accepted for async flows
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "202" ]; then
+              echo "::notice::Successfully sent discussion #${{ steps.inputs.outputs.number }} to Power Automate"
+              exit 0
+            fi
+
+            # Check for non-retryable Power Automate errors
+            ERROR_CODE=$(echo "$RESP_BODY" | jq -r '.error.code // empty' 2>/dev/null || true)
+            if [ "$ERROR_CODE" = "WorkflowTriggerIsNotEnabled" ]; then
+              echo "::error::Power Automate flow is suspended and must be re-enabled before it can accept requests. Go to Power Automate, find the flow, and turn it on."
+              exit 1
+            fi
+
+            if [ $ATTEMPT -lt $MAX_RETRIES ]; then
+              echo "::warning::Power Automate webhook returned HTTP $HTTP_CODE. Retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2))
+            fi
+          done
+
+          echo "::error::Power Automate webhook returned HTTP $HTTP_CODE after $MAX_RETRIES attempts"
+          exit 1
 
       - name: Comment on Discussion
         if: github.event_name != 'workflow_dispatch'
